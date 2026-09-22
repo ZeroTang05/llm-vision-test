@@ -48,9 +48,9 @@ npm start
 You'll see:
 
 ```
-vision-test 已启动: http://localhost:3000
-支持 Provider: anthropic / openai
-  → 在页面右上角「设置」里随时切换 provider / 模型 / Key，无需重启
+vision-test running at: http://localhost:3000
+Providers available: anthropic / openai
+  → Switch provider / model / key anytime in the in-app Settings (⚙) — no restart needed.
 ```
 
 ### 3. Open the browser
@@ -67,7 +67,7 @@ Click the ⚙️ gear icon in the top-right corner, pick **Anthropic** or **Open
 | Model | any vision-capable model name (e.g. `claude-sonnet-5`, `gpt-4o`) |
 | Base URL | _optional_ — leave blank for official; fill in for proxies/alternatives |
 
-Click **保存**. Your settings are saved to `localStorage`; you won't be asked again.
+Click **Save**. Your settings are saved to `localStorage`; you won't be asked again.
 
 > ⚠️ **Heads up:** the API key is stored in your browser's localStorage in plain text. That's fine for local tinkering, **not** for shared machines or production. For production, route through a proper backend with secrets in env vars.
 
@@ -76,7 +76,7 @@ Click **保存**. Your settings are saved to `localStorage`; you won't be asked 
 - Drop a picture into the upload zone, **or**
 - Click one of the 8 sample thumbnails
 
-Hit **开始检测**, wait a few seconds, and your model-drawn bounding boxes will appear on the right.
+Hit **Detect**, wait a few seconds, and your model-drawn bounding boxes will appear on the right.
 
 ## What "good detection" looks like
 
@@ -86,22 +86,26 @@ That's the bar. If your model returns 1 box where you expected 9, or boxes that 
 
 ## How it works (1-minute tour)
 
-```
-Browser                       Server (server.js)              LLM API
-  │ upload (or sample) ───────▶  GET /api/samples               │
-  │                             │                                │
-  │ ◀──── thumbnails list ──────│                                │
-  │                             │                                │
-  │ click "Detect"              │                                │
-  │ ────────────────────────────▶ POST /api/detect              │
-  │                             │  ① compress image to ≤1024px  │
-  │                             │  ② call provider's SDK        │
-  │                             │ ──────────────────────────────▶│
-  │                             │ ◀──── JSON: [{name, bbox_2d}] ─│
-  │ ◀── boxes + raw text ──────│                                │
-  │ canvas draws boxes on the   │                                │
-  │ ORIGINAL (uncompressed)     │                                │
-  │ image                       │                                │
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User (Browser)
+    participant S as Server (server.js)
+    participant L as LLM API
+
+    U->>S: GET /api/samples
+    S-->>U: thumbnail list
+
+    Note over U: Pick an image<br/>(upload or sample)
+
+    U->>S: POST /api/detect<br/>(compressed image + originalSize + provider/key/model/baseUrl)
+    S->>S: ① compress image to ≤ maxEdge px<br/>② build SDK client with request credentials
+    S->>L: chat completion request<br/>(provider-specific payload)
+    L-->>S: model reply (text containing JSON array of {name, bbox_2d})
+    S->>S: parseDetections(text)
+    S-->>U: { detections, raw, model, usage, … }
+
+    Note over U: Scale 0-1000 boxes to original-image pixels<br/>Draw boxes on the ORIGINAL (uncompressed) canvas
 ```
 
 Two design choices worth knowing:
@@ -166,12 +170,6 @@ vision-test/
 The `datasets/coco8/` directory contains the official Ultralytics mini-COCO dataset (8 images) with human-annotated YOLO-format labels in `labels/`. Useful if you want to quantitatively compare a model's output against ground truth.
 
 ## Troubleshooting
-
-<details>
-<summary><b>Click ⚙️ then ×, nothing happens / I can't close the panel</b></summary>
-
-Reload the page. This used to be a CSS bug where the modal's `display: flex` overrode the HTML `hidden` attribute; it's fixed.
-</details>
 
 <details>
 <summary><b>403 "Request not allowed" from the model</b></summary>

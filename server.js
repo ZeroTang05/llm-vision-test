@@ -1,18 +1,21 @@
 /**
- * vision-test 服务端（多 Provider 代理模式）
+ * vision-test backend (multi-provider proxy mode)
  *
- * 职责：
- * 1. 托管前端页面（public/）和 YOLO 样例数据集（datasets/）
- * 2. GET  /api/samples —— 列出数据集里的样例图片
- * 3. POST /api/detect —— 接收前端传来的图片 + provider + Key + Model + BaseURL，
- *    根据 provider 分发到不同 SDK（Anthropic / OpenAI-compatible），
- *    把模型返回的 JSON（类别 + 边界框）解析后回传给前端渲染。
+ * Responsibilities:
+ * 1. Serve the frontend (public/) and the COCO8 sample dataset (datasets/).
+ * 2. GET  /api/samples — list sample images for the thumbnails.
+ * 3. POST /api/detect  — accept image + provider + Key + Model + BaseURL,
+ *    dispatch to the matching SDK (Anthropic / OpenAI-compatible),
+ *    parse the JSON (classes + bboxes) the model returns,
+ *    and forward it to the frontend for rendering.
  *
- * 凭证约定：
- *   - 浏览器无法直连 LLM API（无 CORS），所以前端把 Key 发到这里转发。
- *   - Key 永远只活在内存里（不写日志、不落盘），前端负责 localStorage 缓存。
- *   - .env / 环境变量里的 ANTHROPIC_API_KEY / OPENAI_API_KEY 等仍然生效，
- *     作为 fallback；只要请求里带了对应字段，就用请求里的。
+ * Credential handling:
+ *   - Browsers cannot hit LLM APIs directly (CORS), so the frontend
+ *     forwards the API key here.
+ *   - Keys live in memory only (never logged, never persisted on disk).
+ *     The frontend owns localStorage caching.
+ *   - .env / process.env values (ANTHROPIC_API_KEY / OPENAI_API_KEY …)
+ *     act as fallback: if the request carries a value, it wins.
  */
 require('dotenv').config();
 
@@ -24,7 +27,7 @@ const OpenAI = require('openai').default;
 
 const PORT = process.env.PORT || 3000;
 
-// 默认模型（请求体里没指定时用这个）
+// Default models (used when the request body doesn't specify one)
 const DEFAULT_MODELS = {
   anthropic: 'claude-sonnet-5',
   openai: 'gpt-4o',
@@ -37,10 +40,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/datasets', express.static(path.join(__dirname, 'datasets')));
 
 /**
- * 给模型的检测指令。
- * 坐标约定用 0-1000 的归一化整数（左上角是 0,0，右下角是 1000,1000），
- * 这是 Anthropic 官方推荐的写法；OpenAI 我们也沿用同样的约定，模型表现稳定。
- * 前端拿到后再按图片实际宽高换算回像素。
+ * Detection prompt sent to the model.
+ * Box coordinates use 0-1000 normalized integers
+ * (top-left = 0,0; bottom-right = 1000,1000). This is the convention
+ * Anthropic officially recommends, and OpenAI models handle it well too.
+ * The frontend scales these back to pixels using the original image's
+ * actual dimensions.
  */
 const DETECT_PROMPT = `Detect all notable objects in this image.
 
@@ -52,20 +57,21 @@ bbox_2d uses integers in the range 0-1000 on both axes:
 x1 < x2, y1 < y2. If no objects are found, return [].`;
 
 /**
- * 从模型的回复文本中解析出检测框数组。
- * 模型偶尔会在 JSON 外面套一层 ```json 代码块或加几句说明，
- * 所以先剥掉围栏，再截取第一个 [ 到最后一个 ] 之间的内容解析。
+ * Parse the model's reply text into an array of detections.
+ * Models occasionally wrap the JSON in ```json fences or add a sentence
+ * around it, so we strip the fences and slice from the first [ to the
+ * last ] before parsing.
  */
 function parseDetections(text) {
   const stripped = text.replace(/```/g, '').trim();
   const start = stripped.indexOf('[');
   const end = stripped.lastIndexOf(']');
   if (start === -1 || end === -1) {
-    throw new Error('模型回复里找不到 JSON 数组');
+    throw new Error('No JSON array found in model reply');
   }
   const arr = JSON.parse(stripped.slice(start, end + 1));
 
-  if (!Array.isArray(arr)) throw new Error('模型回复不是 JSON 数组');
+  if (!Array.isArray(arr)) throw new Error('Model reply is not a JSON array');
 
   return arr.map((item, i) => {
     if (
@@ -75,13 +81,13 @@ function parseDetections(text) {
       item.bbox_2d.length !== 4 ||
       !item.bbox_2d.every((v) => typeof v === 'number' && Number.isFinite(v))
     ) {
-      throw new Error(`第 ${i + 1} 个检测框格式不对：${JSON.stringify(item)}`);
+      throw new Error(`Detection #${i + 1} has the wrong shape: ${JSON.stringify(item)}`);
     }
     return { name: item.name, bbox_2d: item.bbox_2d };
   });
 }
 
-// ---------- 样例图片列表 ----------
+// ---------- Sample image listing ----------
 app.get('/api/samples', (req, res) => {
   const datasetDir = path.join(__dirname, 'datasets', 'coco8', 'images');
   const samples = ['train', 'val'].flatMap((split) => {
@@ -99,13 +105,13 @@ app.get('/api/samples', (req, res) => {
 });
 
 // ============================================================
-// Provider 适配层
+// Provider adapters
 // ============================================================
 
 /**
- * Anthropic 适配器
- * 输入：data URL、mime、prompt、{apiKey, baseURL, model}
- * 输出：{ text, usage }
+ * Anthropic adapter
+ * Input: data URL, mime, prompt, {apiKey, baseURL, model}
+ * Output: { text, usage }
  */
 async function callAnthropic({ mediaType, base64, prompt, apiKey, baseURL, model }) {
   const client = new Anthropic({
@@ -139,9 +145,10 @@ async function callAnthropic({ mediaType, base64, prompt, apiKey, baseURL, model
 }
 
 /**
- * OpenAI 兼容适配器
- * 输入同上；image 用 image_url 字段（直接塞 data URL 是 OpenAI 支持的写法）
- * 输出：{ text, usage }
+ * OpenAI-compatible adapter
+ * Same inputs as the Anthropic one; the image uses image_url (a data URL
+ * is a valid value OpenAI accepts).
+ * Output: { text, usage }
  */
 async function callOpenAI({ mediaType, base64, prompt, apiKey, baseURL, model }) {
   const client = new OpenAI({
@@ -170,19 +177,20 @@ async function callOpenAI({ mediaType, base64, prompt, apiKey, baseURL, model })
 }
 
 // ============================================================
-// 检测主接口
+// Detect endpoint
 // ============================================================
 
 app.post('/api/detect', async (req, res) => {
-  // 1. 图片校验
+  // 1. Validate image (data URL → mime + base64)
   const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/s.exec(req.body.image || '');
   if (!match) {
-    return res.status(400).json({ error: '图片格式不支持，请上传 JPEG / PNG / WebP / GIF' });
+    return res.status(400).json({ error: 'Unsupported image format. Please upload JPEG / PNG / WebP / GIF.' });
   }
   const mediaType = match[1];
   const base64 = match[2];
 
-  // 2. 原图尺寸校验（前端用这个把 0-1000 归一化框换算回原图像素）
+  // 2. Validate originalSize (frontend uses it to scale 0-1000 bboxes
+  //    back to original-image pixel coords)
   const originalSize = req.body.originalSize;
   if (
     !originalSize ||
@@ -191,28 +199,28 @@ app.post('/api/detect', async (req, res) => {
     originalSize.width <= 0 ||
     originalSize.height <= 0
   ) {
-    return res.status(400).json({ error: '缺少 originalSize: { width, height }' });
+    return res.status(400).json({ error: 'Missing originalSize: { width, height }' });
   }
 
-  // 3. 解析 provider（默认 anthropic，向后兼容老请求）
+  // 3. Resolve provider (default 'anthropic' for backwards compatibility)
   const provider = String(req.body.provider || 'anthropic').toLowerCase();
   if (!['anthropic', 'openai'].includes(provider)) {
-    return res.status(400).json({ error: `不支持的 provider：${provider}（可选 anthropic / openai）` });
+    return res.status(400).json({ error: `Unsupported provider: ${provider} (allowed: anthropic / openai)` });
   }
 
-  // 4. 解析 Key（请求体优先，env 兜底）
+  // 4. Resolve API key (request body wins, env is fallback)
   let apiKey =
     (req.body.apiKey && String(req.body.apiKey).trim()) ||
     (provider === 'openai' ? process.env.OPENAI_API_KEY : process.env.ANTHROPIC_API_KEY);
   if (!apiKey) {
     return res.status(400).json({
-      error: `缺少 ${provider} 的 API Key。请在「设置」里填写，或在服务器 .env 里设置 ${
+      error: `Missing API key for ${provider}. Please fill it in via the in-app Settings (⚙), or set ${
         provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'
-      }。`,
+      } in the server's .env file.`,
     });
   }
 
-  // 5. baseURL 和 model
+  // 5. baseURL and model
   const baseURL =
     (req.body.baseUrl && String(req.body.baseUrl).trim()) ||
     (provider === 'openai' ? process.env.OPENAI_BASE_URL : process.env.ANTHROPIC_BASE_URL) ||
@@ -222,7 +230,7 @@ app.post('/api/detect', async (req, res) => {
     (provider === 'openai' ? process.env.OPENAI_MODEL : process.env.MODEL) ||
     DEFAULT_MODELS[provider];
 
-  // 6. 调用对应 provider
+  // 6. Dispatch to the right provider
   try {
     const adapter = provider === 'openai' ? callOpenAI : callAnthropic;
     const { text, usage } = await adapter({
@@ -255,12 +263,12 @@ app.post('/api/detect', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`vision-test 已启动: http://localhost:${PORT}`);
+  console.log(`vision-test running at: http://localhost:${PORT}`);
   console.log(
-    `支持 Provider: anthropic${process.env.ANTHROPIC_API_KEY ? ' (Key: .env)' : ''} / ` +
-      `openai${process.env.OPENAI_API_KEY ? ' (Key: .env)' : ''}`
+    `Providers available: anthropic${process.env.ANTHROPIC_API_KEY ? ' (key: .env)' : ''} / ` +
+      `openai${process.env.OPENAI_API_KEY ? ' (key: .env)' : ''}`
   );
   console.log(
-    `  → 在页面右上角「设置」里随时切换 provider / 模型 / Key，无需重启`
+    `  → Switch provider / model / key anytime in the in-app Settings (⚙) — no restart needed.`
   );
 });

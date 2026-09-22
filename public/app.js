@@ -1,18 +1,21 @@
 /**
- * vision-test 前端逻辑
+ * vision-test frontend logic
  *
- * 流程：选图（本地上传 或 点数据集缩略图）→ 展示原图 →
- * 点「开始检测」时：先按 MAX_DIM 压缩原图 → 把压缩图 + 原图尺寸 + 当前凭证（Key/Model/BaseURL） 一起发到 /api/detect →
- * 后端调用 Claude 拿回 类别 + 边界框（坐标是 0-1000 归一化，相对压缩图）→
- * 前端用 **原图** 的宽高换算回像素，把框画到原图 canvas 上。
+ * Flow: pick an image (upload or sample) → display original →
+ * click "Detect": compress to MAX_DIM → POST compressed image + original
+ * dimensions + current credentials (Key/Model/BaseURL) to /api/detect →
+ * backend calls the LLM and returns classes + 0-1000 bbox coords →
+ * frontend converts those coords back to pixels using the ORIGINAL
+ * image's dimensions and draws the boxes on the original canvas.
  *
- * 关键不变量：
- *  - 模型看到的图 = 压缩图（节省 payload / token）
- *  - 框画回 = 原图（避免压缩重采样带来的几何误差）
- *  - API Key / Model / BaseURL 存在浏览器 localStorage；改完保存即时生效，无需刷新
+ * Key invariants:
+ *  - Image sent to the model = compressed image (saves payload/tokens).
+ *  - Boxes drawn on        = original image (avoids compression artifacts).
+ *  - API Key / Model / BaseURL live in browser localStorage; save once,
+ *    live-switch without refresh.
  */
 
-// ---------- DOM 引用 ----------
+// ---------- DOM references ----------
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const sampleGrid = document.getElementById('sampleGrid');
@@ -26,7 +29,7 @@ const detectionsEl = document.getElementById('detections');
 const rawOutput = document.getElementById('rawOutput');
 const rawText = document.getElementById('rawText');
 
-// 设置面板相关
+// Settings panel
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
 const settingsClose = document.getElementById('settingsClose');
@@ -40,12 +43,12 @@ const clearSettingsBtn = document.getElementById('clearSettingsBtn');
 const settingsHint = document.getElementById('settingsHint');
 const providerRadios = document.querySelectorAll('input[name="provider"]');
 
-// 当前选中的图片
+// Currently selected image
 let originalImg = null;
 let originalDataUrl = null;
 let compressedDataUrl = null;
 
-// ---------- 配色 ----------
+// ---------- Color palette (same class → same color, deterministic) ----------
 const PALETTE = [
   '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4',
   '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e',
@@ -63,7 +66,7 @@ function setStatus(msg, isError = false) {
 }
 
 // ============================================================
-// 配置层：localStorage 读写
+// Config layer: localStorage read/write
 // ============================================================
 
 const LS_KEYS = {
@@ -74,8 +77,6 @@ const LS_KEYS = {
 };
 
 const DEFAULT_PROVIDER = 'anthropic';
-
-// 已知常用模型（UI 下拉；想用别的可以直接在「自定义」里填）
 
 const ConfigStore = {
   get(key) {
@@ -90,7 +91,7 @@ const ConfigStore = {
       if (value) localStorage.setItem(LS_KEYS[key], value);
       else localStorage.removeItem(LS_KEYS[key]);
     } catch (err) {
-      console.warn('localStorage 写入失败：', err);
+      console.warn('localStorage write failed:', err);
     }
   },
   clear() {
@@ -102,6 +103,7 @@ const ConfigStore = {
   },
   snapshot() {
     return {
+      provider: this.get('provider') || DEFAULT_PROVIDER,
       apiKey: this.get('apiKey'),
       model: this.get('model'),
       baseUrl: this.get('baseUrl'),
@@ -110,11 +112,11 @@ const ConfigStore = {
 };
 
 // ============================================================
-// 设置面板 UI
+// Settings panel
 // ============================================================
 
 function openSettings() {
-  // 回填当前配置
+  // Pre-fill with current config
   const cfg = ConfigStore.snapshot();
   const provider = cfg.provider || DEFAULT_PROVIDER;
   for (const r of providerRadios) r.checked = r.value === provider;
@@ -133,26 +135,27 @@ function closeSettings() {
 }
 
 settingsBtn.addEventListener('click', openSettings);
-// 关闭按钮：用 mousedown 而不是 click，避免某些浏览器里 click 被吞。
-// 同时 stopPropagation 防止冒泡到 .modal 时被"点遮罩关闭"那条逻辑处理。
+// Close button: use mousedown (not click) — some browsers swallow click after
+// a mouseup that happens on a DOM that's about to be removed. Also
+// stopPropagation so the "click backdrop to close" handler doesn't fire.
 settingsClose.addEventListener('mousedown', (e) => {
   e.stopPropagation();
-  e.preventDefault(); // 阻止默认的 focus 行为，避免按钮拿到 focus 时有奇怪的 :focus 样式干扰
+  e.preventDefault();
   closeSettings();
 });
-// 点遮罩关闭（只在 e.target 严格等于遮罩时）
+// Backdrop click closes (only when target is the backdrop itself)
 settingsPanel.addEventListener('click', (e) => {
   if (e.target === settingsPanel) closeSettings();
 });
 
-// 显示/隐藏 Key 明文（默认遮住）
+// Show/hide the key in plain text (default: hidden)
 toggleKeyVisibility.addEventListener('click', () => {
   apiKeyInput.type = apiKeyInput.type === 'password' ? 'text' : 'password';
-  toggleKeyVisibility.textContent = apiKeyInput.type === 'password' ? '显示' : '隐藏';
+  toggleKeyVisibility.textContent = apiKeyInput.type === 'password' ? 'Show' : 'Hide';
 });
 
 saveSettingsBtn.addEventListener('click', () => {
-  // 取选中的 provider
+  // Determine selected provider
   let provider = DEFAULT_PROVIDER;
   for (const r of providerRadios) {
     if (r.checked) {
@@ -166,18 +169,17 @@ saveSettingsBtn.addEventListener('click', () => {
   const baseUrl = baseUrlInput.value.trim();
 
   if (!apiKey) {
-    settingsHint.textContent = '❌ API Key 不能为空';
+    settingsHint.textContent = '❌ API Key is required';
     settingsHint.className = 'settings-hint error';
     return;
   }
   if (!model) {
-    settingsHint.textContent = '❌ 模型不能为空';
+    settingsHint.textContent = '❌ Model is required';
     settingsHint.className = 'settings-hint error';
     return;
   }
-  // baseUrl 留空就当作"走官方"
   if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
-    settingsHint.textContent = '❌ Base URL 必须以 http:// 或 https:// 开头';
+    settingsHint.textContent = '❌ Base URL must start with http:// or https://';
     settingsHint.className = 'settings-hint error';
     return;
   }
@@ -185,9 +187,9 @@ saveSettingsBtn.addEventListener('click', () => {
   ConfigStore.set('provider', provider);
   ConfigStore.set('apiKey', apiKey);
   ConfigStore.set('model', model);
-  ConfigStore.set('baseUrl', baseUrl); // 空字符串会移除键
+  ConfigStore.set('baseUrl', baseUrl); // empty string removes the key
 
-  settingsHint.textContent = `✅ 已保存（${provider}），下次检测立即生效`;
+  settingsHint.textContent = `✅ Saved (${provider}). Changes apply on next detection.`;
   settingsHint.className = 'settings-hint success';
 
   refreshDetectButton();
@@ -196,35 +198,35 @@ saveSettingsBtn.addEventListener('click', () => {
 });
 
 clearSettingsBtn.addEventListener('click', () => {
-  if (!confirm('清空保存的 Provider / API Key / Model / Base URL？')) return;
+  if (!confirm('Clear saved Provider / API Key / Model / Base URL?')) return;
   ConfigStore.clear();
   for (const r of providerRadios) r.checked = r.value === DEFAULT_PROVIDER;
   apiKeyInput.value = '';
   modelInput.value = '';
   baseUrlInput.value = '';
-  settingsHint.textContent = '已清空。服务器 .env 里的配置仍然生效（兜底）。';
+  settingsHint.textContent = 'Cleared. Server .env values still apply as fallback.';
   settingsHint.className = 'settings-hint';
   refreshDetectButton();
 });
 
 function refreshDetectButton() {
   const hasKey = !!ConfigStore.get('apiKey');
-  if (!originalDataUrl) return; // 还没选图时不动按钮的 disabled
+  if (!originalDataUrl) return; // no image selected → leave the button alone
   detectBtn.disabled = !hasKey;
   if (!hasKey) {
-    setStatus('已选图，但还没配 API Key。点右上角「设置」填写后即可检测。', true);
+    setStatus('Image selected, but no API Key configured. Click ⚙ Settings to add one.', true);
   }
 }
 
 // ============================================================
-// 图片读取 + 压缩
+// Image loading + compression
 // ============================================================
 
 function blobToDataURL(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('读取图片失败'));
+    reader.onerror = () => reject(new Error('Failed to read image blob'));
     reader.readAsDataURL(blob);
   });
 }
@@ -238,14 +240,15 @@ function dataUrlToImage(dataUrl) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('图片解码失败'));
+    img.onerror = () => reject(new Error('Image decode failed'));
     img.src = dataUrl;
   });
 }
 
 /**
- * 把原图缩到最长边 ≤ maxDim，编码成 JPEG dataURL。
- * 长宽比保持不变；maxDim 不合法（NaN / ≤0）或已经 ≤ maxDim 时返回原图。
+ * Downscale the original image so its longest edge ≤ maxDim, encoded as JPEG.
+ * Preserves aspect ratio. If maxDim is invalid (NaN/≤0) or image already
+ * fits, returns the original unchanged.
  */
 async function compressImage(originalDataUrl, maxDim) {
   const img = await dataUrlToImage(originalDataUrl);
@@ -266,6 +269,7 @@ async function compressImage(originalDataUrl, maxDim) {
   c.width = tw;
   c.height = th;
   c.getContext('2d').drawImage(img, 0, 0, tw, th);
+  // JPEG 0.85 is the "barely-noticeable but much smaller" sweet spot
   return {
     dataUrl: c.toDataURL('image/jpeg', 0.85),
     width: tw,
@@ -274,7 +278,7 @@ async function compressImage(originalDataUrl, maxDim) {
   };
 }
 
-// ---------- 展示原图 ----------
+// ---------- Display the original image ----------
 
 function showOriginalImage(dataUrl) {
   dataUrlToImage(dataUrl).then((img) => {
@@ -294,18 +298,19 @@ function showOriginalImage(dataUrl) {
     if (hasKey) {
       const provider = ConfigStore.get('provider') || DEFAULT_PROVIDER;
       setStatus(
-        `已载入 ${img.naturalWidth}×${img.naturalHeight} 的原图，按「开始检测」时按 ` +
-          `最长边 ${maxDimInput.value}px 压缩后调用 ${provider} 模型 ${ConfigStore.get('model') || '默认'}`
+        `Loaded original ${img.naturalWidth}×${img.naturalHeight}. ` +
+          `On Detect it will be downscaled to max edge ${maxDimInput.value}px ` +
+          `and sent to ${provider} model ${ConfigStore.get('model') || '(default)'}.`
       );
       detectBtn.disabled = false;
     } else {
-      setStatus('已选图，但还没配 API Key。点右上角「设置」填写后即可检测。', true);
+      setStatus('Image selected, but no API Key configured. Click ⚙ Settings to add one.', true);
       detectBtn.disabled = true;
     }
-  }).catch(() => setStatus('图片解码失败，换一张试试', true));
+  }).catch(() => setStatus('Image decode failed — try another file.', true));
 }
 
-// ---------- 本地上传：点击 + 拖拽 ----------
+// ---------- Local upload: click + drag-drop ----------
 
 dropZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
@@ -326,13 +331,13 @@ dropZone.addEventListener('drop', (e) => {
 
 async function handleFile(file) {
   if (!file || !file.type.startsWith('image/')) {
-    setStatus('只支持图片文件', true);
+    setStatus('Only image files are supported.', true);
     return;
   }
   showOriginalImage(await blobToDataURL(file));
 }
 
-// ---------- 数据集缩略图 ----------
+// ---------- Sample thumbnails ----------
 
 async function loadSamples() {
   const res = await fetch('/api/samples');
@@ -352,50 +357,50 @@ async function showOriginalImageFromUrl(url) {
     const dataUrl = await urlToDataURL(url);
     showOriginalImage(dataUrl);
   } catch (err) {
-    setStatus(`读取数据集图片失败：${err.message}`, true);
+    setStatus(`Failed to load sample image: ${err.message}`, true);
   }
 }
 
 maxDimInput.addEventListener('change', () => {
   if (originalImg) {
     compressedDataUrl = null;
-    setStatus(`已切换最长边 ${maxDimInput.value}px，下次检测时生效`);
+    setStatus(`Max edge set to ${maxDimInput.value}px — will apply on next Detect.`);
   }
 });
 
 // ============================================================
-// 检测
+// Detect
 // ============================================================
 
 detectBtn.addEventListener('click', async () => {
   if (!originalDataUrl) return;
 
-  // 实时从 localStorage 取最新配置（用户可能在设置面板改了没刷新）
+  // Re-read config live (user may have edited it in the settings panel)
   const cfg = ConfigStore.snapshot();
   if (!cfg.apiKey) {
-    setStatus('请先在右上角「设置」里填写 API Key', true);
+    setStatus('Please fill in your API Key in ⚙ Settings first.', true);
     openSettings();
     return;
   }
 
   detectBtn.disabled = true;
   try {
-    // 1. 压缩
+    // 1. Compress (if not already)
     if (!compressedDataUrl) {
-      setStatus(`按最长边 ${maxDimInput.value}px 压缩中…`);
+      setStatus(`Compressing to max edge ${maxDimInput.value}px…`);
       const r = await compressImage(originalDataUrl, maxDimInput.value);
       compressedDataUrl = r.dataUrl;
       const ratioKB = (compressedDataUrl.length / 1024).toFixed(0);
       setStatus(
         r.scaled
-          ? `压缩完成：${originalImg.naturalWidth}×${originalImg.naturalHeight} → ${r.width}×${r.height}（约 ${ratioKB} KB），正在调模型 ${cfg.model}…`
-          : `图片已 ≤ ${maxDimInput.value}px，无需压缩，正在调模型 ${cfg.model}…`
+          ? `Compressed ${originalImg.naturalWidth}×${originalImg.naturalHeight} → ${r.width}×${r.height} (~${ratioKB} KB). Calling ${cfg.model}…`
+          : `Image already ≤ ${maxDimInput.value}px, no compression needed. Calling ${cfg.model}…`
       );
     } else {
-      setStatus(`正在调模型 ${cfg.model}…`);
+      setStatus(`Calling ${cfg.model}…`);
     }
 
-    // 2. 调接口：压缩图 + 原图尺寸 + 当前配置（含 provider）
+    // 2. POST: compressed image + original size + current config (incl. provider)
     const res = await fetch('/api/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -408,26 +413,26 @@ detectBtn.addEventListener('click', async () => {
         provider: cfg.provider || DEFAULT_PROVIDER,
         apiKey: cfg.apiKey,
         model: cfg.model,
-        baseUrl: cfg.baseUrl || undefined, // 空字符串就别发了
+        baseUrl: cfg.baseUrl || undefined, // don't send empty string
       }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
+    if (!res.ok) throw new Error(data.error || `Request failed (HTTP ${res.status})`);
     renderDetections(data);
     setStatus(
-      `检出 ${data.detections.length} 个目标 · [${data.provider}] ${data.model} ` +
+      `Found ${data.detections.length} objects · [${data.provider}] ${data.model} ` +
         `(${data.configSource?.model || '?'})` +
-        ` · 输入 ${data.usage.input_tokens} tokens / 输出 ${data.usage.output_tokens} tokens`
+        ` · input ${data.usage.input_tokens} tokens / output ${data.usage.output_tokens} tokens`
     );
   } catch (err) {
-    setStatus(`检测失败：${err.message}`, true);
+    setStatus(`Detection failed: ${err.message}`, true);
   } finally {
     detectBtn.disabled = !ConfigStore.get('apiKey');
   }
 });
 
 // ============================================================
-// 渲染边界框（按原图尺寸）
+// Render boxes (on the original image)
 // ============================================================
 
 function renderDetections(data) {
@@ -441,6 +446,7 @@ function renderDetections(data) {
   ctx.textBaseline = 'top';
 
   data.detections.forEach((d, i) => {
+    // 0-1000 normalized → pixel coords on the ORIGINAL image
     const x1 = (d.bbox_2d[0] / 1000) * W;
     const y1 = (d.bbox_2d[1] / 1000) * H;
     const x2 = (d.bbox_2d[2] / 1000) * W;
@@ -453,6 +459,7 @@ function renderDetections(data) {
 
     const label = `${i + 1}. ${d.name}`;
     const tw = ctx.measureText(label).width;
+    // If label would overflow the top, push it inside the box
     const labelY = y1 - fontSize - 8 >= 0 ? y1 - fontSize - 8 : y1;
     ctx.fillStyle = color;
     ctx.fillRect(x1, labelY, tw + 10, fontSize + 8);
@@ -476,7 +483,7 @@ function renderDetections(data) {
   rawOutput.hidden = false;
 }
 
-// Esc 关设置面板
+// Esc closes the settings panel
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !settingsPanel.hidden) closeSettings();
 });

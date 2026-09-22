@@ -1,19 +1,19 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>多模态 LLM 目标检测测试</title>
+  <title>Vision Test — Multimodal LLM Object Detection</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <div class="header-left">
-      <h1>多模态 LLM 目标检测测试</h1>
-      <p class="subtitle">上传图片 → LLM 输出边界框 + 类别 → 渲染回图片</p>
+      <h1>Vision Test</h1>
+      <p class="subtitle">Upload an image → LLM returns boxes + classes → drawn back on the picture</p>
     </div>
-    <button id="settingsBtn" class="icon-btn" title="设置（API Key / 模型）" aria-label="设置">
-      <!-- inline SVG 齿轮，避免外部依赖 -->
+    <button id="settingsBtn" class="icon-btn" title="Settings (API Key / Model)" aria-label="Settings">
+      <!-- inline SVG gear icon, no external dependencies -->
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"/>
@@ -23,24 +23,24 @@
   </header>
 
   <main>
-    <!-- 左栏：选图 -->
+    <!-- Left column: pick an image -->
     <section class="panel">
-      <h2>选择图片</h2>
+      <h2>Pick an image</h2>
 
       <div id="dropZone" class="drop-zone">
-        <p>拖拽图片到这里<br><span class="hint">或点击选择文件</span></p>
+        <p>Drop an image here<br><span class="hint">or click to choose a file</span></p>
         <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
       </div>
 
       <div class="samples">
-        <h3>从数据集选一张</h3>
+        <h3>Or pick a sample</h3>
         <div id="sampleGrid" class="sample-grid"></div>
       </div>
 
       <div class="detect-controls">
-        <button id="detectBtn" class="detect-btn" disabled>开始检测</button>
+        <button id="detectBtn" class="detect-btn" disabled>Detect</button>
         <label class="maxdim">
-          最长边
+          Max edge
           <input type="number" id="maxDim" min="256" max="4096" step="64" value="1024">
           px
         </label>
@@ -48,36 +48,37 @@
       <div id="status" class="status"></div>
     </section>
 
-    <!-- 右栏：结果 -->
+    <!-- Right column: results -->
     <section class="panel">
-      <h2>检测结果</h2>
+      <h2>Detection results</h2>
 
       <div class="canvas-wrap">
         <canvas id="canvas" hidden></canvas>
-        <div id="placeholder" class="placeholder">选好图片并检测后<br>结果会显示在这里</div>
+        <div id="placeholder" class="placeholder">Pick an image and run detection.<br>Results will appear here.</div>
       </div>
 
       <div id="detections" class="detections"></div>
 
       <details id="rawOutput" class="raw-output" hidden>
-        <summary>模型原始输出</summary>
+        <summary>Raw model output</summary>
         <pre id="rawText"></pre>
       </details>
     </section>
   </main>
 
-  <!-- 设置面板（默认隐藏） -->
+  <!-- Settings panel (hidden by default) -->
   <div id="settingsPanel" class="modal" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <h2>设置</h2>
-        <button id="settingsClose" class="icon-btn" title="关闭" aria-label="关闭">×</button>
+        <h2>Settings</h2>
+        <button id="settingsClose" class="icon-btn" title="Close" aria-label="Close">×</button>
       </div>
 
       <div class="modal-body">
         <p class="security-note">
-          ⚠️ API Key 会存在浏览器 localStorage（明文）。本机/共享屏幕/浏览器扩展都能看到它，
-          仅适合本机调试。生产环境请走后端代理 + 环境变量。
+          ⚠️ Your API Key is stored in this browser's <code>localStorage</code> in plain text.
+          Anyone with access to this machine, screen-share viewers, and browser extensions can read it.
+          That's fine for local tinkering, <strong>not</strong> for production. Use a backend proxy with env vars instead.
         </p>
 
         <div class="field">
@@ -85,11 +86,11 @@
           <div class="provider-toggle" role="radiogroup" aria-label="Provider">
             <label class="provider-option">
               <input type="radio" name="provider" value="anthropic" checked>
-              <span>Anthropic 兼容</span>
+              <span>Anthropic</span>
             </label>
             <label class="provider-option">
               <input type="radio" name="provider" value="openai">
-              <span>OpenAI 兼容</span>
+              <span>OpenAI-compatible</span>
             </label>
           </div>
         </div>
@@ -97,28 +98,28 @@
         <label class="field">
           <span class="field-label">API Key <span class="required">*</span></span>
           <div class="key-row">
-            <input id="apiKeyInput" type="password" autocomplete="off">
-            <button id="toggleKeyVisibility" type="button" class="ghost-btn">显示</button>
+            <input id="apiKeyInput" type="password" placeholder="sk-ant-xxxxxx or sk-xxxxxx" autocomplete="off">
+            <button id="toggleKeyVisibility" type="button" class="ghost-btn">Show</button>
           </div>
         </label>
 
         <label class="field">
-          <span class="field-label">模型 <span class="required">*</span></span>
-          <input id="modelInput" type="text" autocomplete="off">
-          <span id="modelHint" class="field-hint"></span>
+          <span class="field-label">Model <span class="required">*</span></span>
+          <input id="modelInput" type="text" placeholder="claude-sonnet-5 / gpt-4o / gpt-4o-mini …" autocomplete="off">
+          <span id="modelHint" class="field-hint">Common: claude-sonnet-5, claude-opus-4-8, gpt-4o, gpt-4o-mini</span>
         </label>
 
         <label class="field">
-          <span class="field-label">Base URL <span class="optional">（可选，留空走官方）</span></span>
-          <input id="baseUrlInput" type="text" autocomplete="off">
+          <span class="field-label">Base URL <span class="optional">(optional, leave blank for official endpoint)</span></span>
+          <input id="baseUrlInput" type="text" placeholder="https://your-proxy.example.com/v1" autocomplete="off">
         </label>
 
         <div id="settingsHint" class="settings-hint"></div>
       </div>
 
       <div class="modal-foot">
-        <button id="clearSettingsBtn" type="button" class="ghost-btn danger">清空</button>
-        <button id="saveSettingsBtn" type="button" class="primary-btn">保存</button>
+        <button id="clearSettingsBtn" type="button" class="ghost-btn danger">Clear</button>
+        <button id="saveSettingsBtn" type="button" class="primary-btn">Save</button>
       </div>
     </div>
   </div>
