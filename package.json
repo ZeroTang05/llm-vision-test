@@ -1,0 +1,39 @@
+{
+  "name": "vision-test",
+  "version": "1.0.0",
+  "description": "A quick playground to test your multimodal LLM's object-detection ability — upload an image, get bounding boxes + classes, see results rendered back on the original picture.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "multimodal-llm",
+    "object-detection",
+    "vision",
+    "claude",
+    "anthropic",
+    "openai",
+    "gpt-4o",
+    "benchmark",
+    "demo"
+  ],
+  "license": "MIT",
+  "author": "ZeroTang05",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZeroTang05/vision-test.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ZeroTang05/vision-test/issues"
+  },
+  "homepage": "https://github.com/ZeroTang05/vision-test#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
+    "dotenv": "^18.0.2",
+    "express": "^5.2.1",
+    "openai": "^7.21.0"
+  }
+}

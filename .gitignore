@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 用户配置（绝不能提交）
+.env
+
+# 临时下载目录
+downloads/
+
+# Playwright / 测试相关临时产物
+.playwright-mcp/
+test-results/
+playwright-report/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

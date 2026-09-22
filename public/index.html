@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多模态 LLM 目标检测测试</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>多模态 LLM 目标检测测试</h1>
+      <p class="subtitle">上传图片 → LLM 输出边界框 + 类别 → 渲染回图片</p>
+    </div>
+    <button id="settingsBtn" class="icon-btn" title="设置（API Key / 模型）" aria-label="设置">
+      <!-- inline SVG 齿轮，避免外部依赖 -->
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- 左栏：选图 -->
+    <section class="panel">
+      <h2>选择图片</h2>
+
+      <div id="dropZone" class="drop-zone">
+        <p>拖拽图片到这里<br><span class="hint">或点击选择文件</span></p>
+        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+      </div>
+
+      <div class="samples">
+        <h3>从数据集选一张</h3>
+        <div id="sampleGrid" class="sample-grid"></div>
+      </div>
+
+      <div class="detect-controls">
+        <button id="detectBtn" class="detect-btn" disabled>开始检测</button>
+        <label class="maxdim">
+          最长边
+          <input type="number" id="maxDim" min="256" max="4096" step="64" value="1024">
+          px
+        </label>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+
+    <!-- 右栏：结果 -->
+    <section class="panel">
+      <h2>检测结果</h2>
+
+      <div class="canvas-wrap">
+        <canvas id="canvas" hidden></canvas>
+        <div id="placeholder" class="placeholder">选好图片并检测后<br>结果会显示在这里</div>
+      </div>
+
+      <div id="detections" class="detections"></div>
+
+      <details id="rawOutput" class="raw-output" hidden>
+        <summary>模型原始输出</summary>
+        <pre id="rawText"></pre>
+      </details>
+    </section>
+  </main>
+
+  <!-- 设置面板（默认隐藏） -->
+  <div id="settingsPanel" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button id="settingsClose" class="icon-btn" title="关闭" aria-label="关闭">×</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="security-note">
+          ⚠️ API Key 会存在浏览器 localStorage（明文）。本机/共享屏幕/浏览器扩展都能看到它，
+          仅适合本机调试。生产环境请走后端代理 + 环境变量。
+        </p>
+
+        <div class="field">
+          <span class="field-label">Provider <span class="required">*</span></span>
+          <div class="provider-toggle" role="radiogroup" aria-label="Provider">
+            <label class="provider-option">
+              <input type="radio" name="provider" value="anthropic" checked>
+              <span>Anthropic 兼容</span>
+            </label>
+            <label class="provider-option">
+              <input type="radio" name="provider" value="openai">
+              <span>OpenAI 兼容</span>
+            </label>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="field-label">API Key <span class="required">*</span></span>
+          <div class="key-row">
+            <input id="apiKeyInput" type="password" autocomplete="off">
+            <button id="toggleKeyVisibility" type="button" class="ghost-btn">显示</button>
+          </div>
+        </label>
+
+        <label class="field">
+          <span class="field-label">模型 <span class="required">*</span></span>
+          <input id="modelInput" type="text" autocomplete="off">
+          <span id="modelHint" class="field-hint"></span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Base URL <span class="optional">（可选，留空走官方）</span></span>
+          <input id="baseUrlInput" type="text" autocomplete="off">
+        </label>
+
+        <div id="settingsHint" class="settings-hint"></div>
+      </div>
+
+      <div class="modal-foot">
+        <button id="clearSettingsBtn" type="button" class="ghost-btn danger">清空</button>
+        <button id="saveSettingsBtn" type="button" class="primary-btn">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
