@@ -1,5 +1,5 @@
 {
-  "name": "vision-test",
+  "name": "llm-vision-test",
   "version": "1.0.0",
   "description": "A quick playground to test your multimodal LLM's object-detection ability — upload an image, get bounding boxes + classes, see results rendered back on the original picture.",
   "main": "server.js",
@@ -21,12 +21,12 @@
   "author": "ZeroTang05",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZeroTang05/vision-test.git"
+    "url": "git+https://github.com/ZeroTang05/llm-vision-test.git"
   },
   "bugs": {
-    "url": "https://github.com/ZeroTang05/vision-test/issues"
+    "url": "https://github.com/ZeroTang05/llm-vision-test/issues"
   },
-  "homepage": "https://github.com/ZeroTang05/vision-test#readme",
+  "homepage": "https://github.com/ZeroTang05/llm-vision-test#readme",
   "engines": {
     "node": ">=18"
   },

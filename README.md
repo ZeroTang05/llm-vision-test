@@ -34,8 +34,8 @@ It's intentionally a demo, not a production system:
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/ZeroTang05/vision-test.git
-cd vision-test
+git clone https://github.com/ZeroTang05/llm-vision-test.git
+cd llm-vision-test
 npm install
 ```
 
@@ -155,7 +155,7 @@ If you find a provider that needs special handling, open an issue.
 ## Project layout
 
 ```
-vision-test/
+llm-vision-test/
 ├── server.js              ← Express server + provider adapters
 ├── package.json
 ├── public/
